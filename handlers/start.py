@@ -1,6 +1,7 @@
 """
 handlers/start.py
 /start, /help, /about commands + force-sub callback.
+FIX: Pyrogram User has no .full_name — use first_name + last_name instead.
 """
 import asyncio
 import logging
@@ -24,12 +25,20 @@ from utils.helpers import (
 
 logger = logging.getLogger(__name__)
 
+
+def _full_name(user) -> str:
+    """Build full name from Pyrogram User (no .full_name attribute in v2)."""
+    first = user.first_name or ""
+    last  = user.last_name  or ""
+    return f"{first} {last}".strip() or "User"
+
+
 # ── /start ────────────────────────────────────────────────────────────────────
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     user = message.from_user
-    await db.add_user(user.id, user.full_name, user.username)
+    await db.add_user(user.id, _full_name(user), user.username)
 
     # Force-sub check
     missing = await check_force_sub(client, user.id)
@@ -109,7 +118,7 @@ async def about_cmd(client: Client, message: Message):
     await message.reply_text(script.ABOUT_TXT, reply_markup=kb)
 
 
-# ── Callback – navigation & force-sub re-check ────────────────────────────────
+# ── Callbacks – navigation & force-sub re-check ───────────────────────────────
 
 @Client.on_callback_query(filters.regex("^(start|help|about|check_fsub)$"))
 async def nav_callback(client: Client, cb: CallbackQuery):
@@ -128,8 +137,31 @@ async def nav_callback(client: Client, cb: CallbackQuery):
             await cb.message.delete()
         except Exception:
             pass
-        # Re-trigger /start flow
-        await start_handler(client, cb.message)
+        # Simulate /start by building the welcome message directly
+        await db.add_user(user.id, _full_name(user), user.username)
+        photo_url = await fetch_random_wallpaper()
+        caption   = script.START_TXT.format(user.mention)
+        keyboard  = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("📖 Help",  callback_data="help"),
+                    InlineKeyboardButton("ℹ️ About", callback_data="about"),
+                ],
+                [
+                    InlineKeyboardButton(
+                        f"📢 Updates – @{Config.UPDATE_CHANNEL}",
+                        url=f"https://t.me/{Config.UPDATE_CHANNEL}",
+                    )
+                ],
+            ]
+        )
+        if photo_url:
+            try:
+                await cb.message.reply_photo(photo_url, caption=caption, reply_markup=keyboard)
+                return
+            except Exception:
+                pass
+        await cb.message.reply_text(caption, reply_markup=keyboard)
         return
 
     if data == "start":
