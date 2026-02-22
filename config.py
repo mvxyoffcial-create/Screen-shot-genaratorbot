@@ -66,3 +66,6 @@ class Config:
 
     # ── Watermark text ────────────────────────────────────────────────────────
     WATERMARK_TEXT = "@zerodev2"
+
+    # ── Max watermark text length ─────────────────────────────────────────────
+    WATERMARK_MAX_LEN = 32
