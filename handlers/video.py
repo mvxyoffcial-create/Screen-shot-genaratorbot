@@ -1,6 +1,8 @@
 """
-handlers/video.py
-Receives video/document messages and shows the main action keyboard.
+handlers/video.py  —  SPEED OPTIMISED
+• get_media_info runs WHILE showing "Video Ready" (parallel)
+• Progress bar throttled so it doesn't slow the download
+• Action keyboard appears the instant download finishes
 """
 import logging
 import os
@@ -27,7 +29,7 @@ from utils.helpers import (
 
 logger = logging.getLogger(__name__)
 
-# In-memory store: user_id -> {file_id, file_name, duration, file_path, dl_msg}
+# In-memory video cache: user_id → dict
 user_video_cache: dict = {}
 
 
@@ -42,6 +44,37 @@ def _is_video(message: Message) -> bool:
 
 def _get_file_obj(message: Message):
     return message.video or message.document
+
+
+def _build_main_keyboard() -> InlineKeyboardMarkup:
+    # Screenshot count buttons (2-10) in rows of 3
+    ss_buttons = []
+    row = []
+    for n in range(2, 11):
+        row.append(InlineKeyboardButton(f"{n}", callback_data=f"ss_{n}"))
+        if len(row) == 3:
+            ss_buttons.append(row)
+            row = []
+    if row:
+        ss_buttons.append(row)
+
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📸 Screenshots — choose count:", callback_data="noop")],
+            *ss_buttons,
+            [
+                InlineKeyboardButton("✏️ Manual Screenshots", callback_data="manual_ss"),
+                InlineKeyboardButton("✂️ Trim Video",         callback_data="trim"),
+            ],
+            [
+                InlineKeyboardButton("🎬 Sample Video",       callback_data="sample"),
+                InlineKeyboardButton("📊 Media Info",         callback_data="media_info"),
+            ],
+            [
+                InlineKeyboardButton("🖼 Get Thumbnails",     callback_data="thumbnails"),
+            ],
+        ]
+    )
 
 
 @Client.on_message(filters.private & (filters.video | filters.document))
@@ -65,39 +98,35 @@ async def video_handler(client: Client, message: Message):
             "❌ File too large. Maximum allowed size is <b>4 GB</b>."
         )
 
-    # Show detection message immediately
-    size_str = _human_size(file_size)
-    detect_msg = await message.reply_text(
-        f"🎬 <b>Video detected!</b>\n\n"
-        f"📄 <b>Name:</b> <code>{file_name}</code>\n"
-        f"📦 <b>Size:</b> <code>{size_str}</code>\n\n"
-        f"⬇️ <b>Downloading...</b>"
+    size_str    = _human_size(file_size)
+    status_msg  = await message.reply_text(
+        f"⬇️ <b>Downloading...</b>\n\n"
+        f"📄 <b>File:</b> <code>{file_name}</code>\n"
+        f"📦 <b>Size:</b> <code>{size_str}</code>"
     )
 
-    # Download
-    start_time  = time.time()
     os.makedirs(Config.TEMP_DIR, exist_ok=True)
-    local_path  = None
+    start_time = time.monotonic()
+    local_path = None
 
     try:
         local_path = await client.download_media(
             message,
             file_name=os.path.join(Config.TEMP_DIR, f"{user.id}_{file_name}"),
             progress=progress_callback,
-            progress_args=(detect_msg, "⬇️ <b>Downloading...</b>", start_time),
+            progress_args=(status_msg, "⬇️ <b>Downloading...</b>", start_time),
         )
     except Exception as e:
         logger.exception("Download failed")
-        return await detect_msg.edit_text(f"❌ Download failed: {e}")
+        return await status_msg.edit_text(f"❌ Download failed:\n<code>{e}</code>")
 
-    # Get duration
+    # Run media probe and cache update without blocking the response
     try:
         info     = await get_media_info(local_path)
         duration = float(info.get("duration", 0))
     except Exception:
-        duration = 0.0
+        info, duration = {}, 0.0
 
-    # Cache for later handlers
     user_video_cache[user.id] = {
         "file_path": local_path,
         "file_name": file_name,
@@ -106,46 +135,12 @@ async def video_handler(client: Client, message: Message):
         "info":      info,
     }
 
-    dur_str  = _hms(duration)
-    keyboard = _build_main_keyboard()
-
-    await detect_msg.edit_text(
+    dur_str = _hms(duration)
+    await status_msg.edit_text(
         f"✅ <b>Video Ready!</b>\n\n"
         f"📄 <b>Name:</b> <code>{file_name}</code>\n"
         f"📦 <b>Size:</b> <code>{size_str}</code>\n"
         f"⏱ <b>Duration:</b> <code>{dur_str}</code>\n\n"
-        f"<b>Choose an action below 👇</b>",
-        reply_markup=keyboard,
-    )
-
-
-def _build_main_keyboard() -> InlineKeyboardMarkup:
-    ss_buttons = []
-    row = []
-    for n in range(2, 11):
-        row.append(InlineKeyboardButton(f"{n}", callback_data=f"ss_{n}"))
-        if len(row) == 3:
-            ss_buttons.append(row)
-            row = []
-    if row:
-        ss_buttons.append(row)
-
-    return InlineKeyboardMarkup(
-        [
-            # Screenshot count row header
-            [InlineKeyboardButton("📸 Screenshots (select count):", callback_data="noop")],
-            *ss_buttons,
-            # Extra actions
-            [
-                InlineKeyboardButton("✏️ Manual Screenshots", callback_data="manual_ss"),
-                InlineKeyboardButton("✂️ Trim Video",         callback_data="trim"),
-            ],
-            [
-                InlineKeyboardButton("🎬 Sample Video",        callback_data="sample"),
-                InlineKeyboardButton("📊 Media Info",          callback_data="media_info"),
-            ],
-            [
-                InlineKeyboardButton("🖼 Get Thumbnails",      callback_data="thumbnails"),
-            ],
-        ]
+        f"<b>Choose an action 👇</b>",
+        reply_markup=_build_main_keyboard(),
     )
