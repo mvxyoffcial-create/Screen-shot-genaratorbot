@@ -2,7 +2,7 @@
 database.py  –  MongoDB interface via Motor (async)
 Collections:
   users    – registered users
-  settings – per-user settings
+  settings – per-user settings  (includes watermark_text)
   stats    – global counters
 """
 import logging
@@ -29,7 +29,6 @@ class Database:
         full_name: str,
         username: str | None = None,
     ) -> bool:
-        """Insert user if new. Returns True if inserted."""
         if await self.users.find_one({"_id": user_id}):
             return False
         await self.users.insert_one(
@@ -56,15 +55,13 @@ class Database:
 
     async def get_settings(self, user_id: int) -> dict:
         doc = await self.settings.find_one({"_id": user_id})
+        merged = dict(Config.DEFAULT_SETTINGS)
         if doc:
             doc.pop("_id", None)
-            # Merge with defaults so new keys always present
-            merged = dict(Config.DEFAULT_SETTINGS)
             merged.update(doc)
-            return merged
-        defaults = dict(Config.DEFAULT_SETTINGS)
-        await self.settings.insert_one({"_id": user_id, **defaults})
-        return defaults
+        else:
+            await self.settings.insert_one({"_id": user_id, **merged})
+        return merged
 
     async def update_setting(self, user_id: int, key: str, value) -> None:
         await self.settings.update_one(
