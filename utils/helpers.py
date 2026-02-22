@@ -1,13 +1,13 @@
 """
-utils/helpers.py
-Shared utility functions: progress bar, force-sub check, time parsing, cleanup.
+utils/helpers.py  —  SPEED OPTIMISED
+• check_force_sub  → all channels checked IN PARALLEL (asyncio.gather)
+• progress_callback → throttled to 1 update/sec (avoids Telegram flood wait)
+• fetch_random_wallpaper → short 5s timeout, returns fast
 """
 import asyncio
-import math
 import os
 import shutil
 import time
-from pathlib import Path
 from typing import List, Optional
 
 import aiohttp
@@ -18,59 +18,64 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from config import Config
 
 
-# ─────────────────────────── force-sub ────────────────────────────────────────
+# ─────────────────────────── force-sub (parallel) ─────────────────────────────
+
+async def _check_one(client: Client, channel: str, user_id: int) -> Optional[str]:
+    """Return channel username if user is NOT a member, else None."""
+    try:
+        member = await client.get_chat_member(channel, user_id)
+        if member.status.value in ("left", "banned", "restricted"):
+            return channel
+        return None
+    except UserNotParticipant:
+        return channel
+    except (ChatAdminRequired, Exception):
+        return None   # Can't check → allow through
+
 
 async def check_force_sub(client: Client, user_id: int) -> List[str]:
     """
-    Returns list of channel usernames the user has NOT joined.
+    Check ALL channels IN PARALLEL.
+    Returns list of channels the user hasn't joined.
     Empty list = all good.
     """
-    not_joined = []
-    for ch in Config.FSUB_CHANNELS:
-        try:
-            member = await client.get_chat_member(ch, user_id)
-            if member.status.value in ("left", "banned", "restricted"):
-                not_joined.append(ch)
-        except UserNotParticipant:
-            not_joined.append(ch)
-        except ChatAdminRequired:
-            # Bot not admin – skip check for this channel
-            pass
-        except Exception:
-            pass
-    return not_joined
+    results = await asyncio.gather(
+        *[_check_one(client, ch, user_id) for ch in Config.FSUB_CHANNELS],
+        return_exceptions=False,
+    )
+    return [ch for ch in results if ch is not None]
 
 
 async def send_force_sub_message(message: Message) -> None:
-    """Send the force-sub image with join buttons."""
-    buttons = []
-    for ch in Config.FSUB_CHANNELS:
-        buttons.append(
-            [InlineKeyboardButton(f"🔔 Join @{ch}", url=f"https://t.me/{ch}")]
-        )
+    """Send the force-sub banner with join buttons."""
+    buttons = [
+        [InlineKeyboardButton(f"🔔 Join @{ch}", url=f"https://t.me/{ch}")]
+        for ch in Config.FSUB_CHANNELS
+    ]
     buttons.append(
         [InlineKeyboardButton("✅ I Joined – Try Again", callback_data="check_fsub")]
     )
-    markup = InlineKeyboardMarkup(buttons)
-
     await message.reply_photo(
         photo=Config.FSUB_IMAGE,
         caption=(
             "<b>⚠️ Access Restricted!</b>\n\n"
             "You must join our channels to use this bot.\n\n"
-            "🔔 Please join <b>both channels</b> below and tap "
-            "<b>✅ I Joined</b> to continue."
+            "🔔 Join <b>both channels</b> below, then tap ✅ <b>I Joined</b>."
         ),
-        reply_markup=markup,
+        reply_markup=InlineKeyboardMarkup(buttons),
     )
 
 
-# ─────────────────────────── progress bar ─────────────────────────────────────
+# ─────────────────────────── progress bar (throttled) ─────────────────────────
+
+# Map: message_id → last_edit_timestamp
+_last_edit: dict = {}
+_THROTTLE_SEC = 1.5   # minimum seconds between progress edits
+
 
 def _progress_bar(current: int, total: int, width: int = 20) -> str:
     filled = int(width * current / total) if total else 0
-    bar    = "█" * filled + "░" * (width - filled)
-    return bar
+    return "█" * filled + "░" * (width - filled)
 
 
 async def progress_callback(
@@ -80,32 +85,35 @@ async def progress_callback(
     action: str,
     start_time: float,
 ) -> None:
-    """Edit `message` with a live progress bar."""
-    now     = time.time()
-    elapsed = now - start_time
+    """Throttled progress bar — edits at most once per 1.5 seconds."""
+    msg_id = message.id
+    now    = time.monotonic()
+
+    # Skip if updated too recently  ← prevents FloodWait & slowdown
+    if now - _last_edit.get(msg_id, 0) < _THROTTLE_SEC:
+        return
+    _last_edit[msg_id] = now
+
+    elapsed = time.monotonic() - start_time
     speed   = current / elapsed if elapsed > 0 else 0
     eta     = (total - current) / speed if speed > 0 else 0
     pct     = current * 100 / total if total else 0
     bar     = _progress_bar(current, total)
 
-    cur_str   = _human_size(current)
-    tot_str   = _human_size(total)
-    spd_str   = _human_size(int(speed)) + "/s"
-    eta_str   = _hms(eta)
-
     text = (
         f"{action}\n\n"
         f"<code>{bar}</code> {pct:.1f}%\n\n"
-        f"📦 <b>Size:</b> {cur_str} / {tot_str}\n"
-        f"⚡ <b>Speed:</b> {spd_str}\n"
-        f"⏳ <b>ETA:</b> {eta_str}"
+        f"📦 <b>Size:</b> {_human_size(current)} / {_human_size(total)}\n"
+        f"⚡ <b>Speed:</b> {_human_size(int(speed))}/s\n"
+        f"⏳ <b>ETA:</b> {_hms(eta)}"
     )
-
     try:
         await message.edit_text(text)
     except Exception:
         pass
 
+
+# ─────────────────────────── size / time helpers ──────────────────────────────
 
 def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -129,7 +137,7 @@ def parse_time(raw: str) -> Optional[str]:
     Accept HH:MM:SS, MM:SS, or raw seconds and return HH:MM:SS string.
     Returns None if invalid.
     """
-    raw = raw.strip()
+    raw   = raw.strip()
     parts = raw.split(":")
     try:
         if len(parts) == 3:
@@ -150,7 +158,6 @@ def parse_time(raw: str) -> Optional[str]:
 # ─────────────────────────── cleanup ─────────────────────────────────────────
 
 def cleanup(*paths: str) -> None:
-    """Remove files or directories."""
     for p in paths:
         if not p:
             continue
@@ -163,23 +170,28 @@ def cleanup(*paths: str) -> None:
             pass
 
 
-# ─────────────────────────── wallpaper fetch ──────────────────────────────────
+# ─────────────────────────── wallpaper fetch (fast) ──────────────────────────
 
 async def fetch_random_wallpaper() -> Optional[str]:
-    """Fetch a random wallpaper URL from the anime API."""
+    """Fetch a random wallpaper URL. Fails fast (5s timeout)."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(Config.WALLPAPER_API, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                if resp.status == 200:
+        timeout = aiohttp.ClientTimeout(total=5)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(Config.WALLPAPER_API) as resp:
+                if resp.status != 200:
+                    return None
+                # Try JSON first
+                try:
                     data = await resp.json(content_type=None)
-                    # Try common response keys
-                    for key in ("url", "image", "image_url", "link"):
+                    for key in ("url", "image", "image_url", "link", "src"):
                         if key in data:
                             return data[key]
-                    # If response is direct URL string
-                    text = await resp.text()
-                    if text.startswith("http"):
-                        return text.strip()
+                except Exception:
+                    pass
+                # Fallback: plain URL text
+                text = await resp.text()
+                if text.strip().startswith("http"):
+                    return text.strip()
     except Exception:
         pass
     return None
