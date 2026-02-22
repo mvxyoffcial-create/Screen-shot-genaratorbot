@@ -1,6 +1,7 @@
 """
 handlers/sample.py
-Generate a sample video clip from the middle of the video.
+Generate a sample clip from the middle of the video.
+Uses user's own watermark_text from settings.
 """
 import logging
 import time
@@ -8,6 +9,7 @@ import time
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery
 
+from config import Config
 from database import db
 from utils.ffmpeg_utils import generate_sample
 from utils.helpers import (
@@ -34,14 +36,16 @@ async def sample_cb(client: Client, cb: CallbackQuery):
     if not cache:
         return await cb.answer("❌ No video found. Please send a video first.", show_alert=True)
 
-    settings = await db.get_settings(user.id)
+    settings  = await db.get_settings(user.id)
     duration  = int(settings.get("sample_duration", 30))
     watermark = settings.get("watermark_video", False)
+    wm_text   = settings.get("watermark_text",  Config.WATERMARK_TEXT)
 
     await cb.answer(f"🎬 Generating {duration}s sample…")
     status = await cb.message.edit_text(
-        f"🎬 <b>Generating {duration}-second sample clip…</b>\n"
-        f"(Cutting from middle of video)"
+        f"🎬 <b>Generating {duration}-second sample…</b>\n"
+        f"Cutting from middle of video\n"
+        f"Watermark: <code>{'ON – ' + wm_text if watermark else 'OFF'}</code>"
     )
 
     try:
@@ -49,21 +53,22 @@ async def sample_cb(client: Client, cb: CallbackQuery):
             cache["file_path"],
             duration=duration,
             watermark=watermark,
+            watermark_text=wm_text,
         )
     except Exception as e:
-        logger.exception("Sample generation failed")
-        return await status.edit_text(f"❌ Sample generation failed:\n<code>{e}</code>")
+        logger.exception("Sample failed")
+        return await status.edit_text(f"❌ Sample failed:\n<code>{e}</code>")
 
-    await status.edit_text("📤 <b>Uploading sample video…</b>")
+    await status.edit_text("📤 <b>Uploading sample…</b>")
 
     try:
-        start_time = time.time()
+        start_time = time.monotonic()
         await cb.message.reply_video(
             video=out_path,
             caption=(
                 f"🎬 <b>Sample Video</b>\n"
-                f"Duration: <code>{duration}s</code> | "
-                f"Watermark: <code>{'ON' if watermark else 'OFF'}</code>"
+                f"Duration: <code>{duration}s</code>"
+                + (f"\n💧 <code>{wm_text}</code>" if watermark else "")
             ),
             progress=progress_callback,
             progress_args=(status, "📤 <b>Uploading…</b>", start_time),
