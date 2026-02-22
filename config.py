@@ -6,18 +6,16 @@ load_dotenv()
 
 class Config:
     # ── Telegram ──────────────────────────────────────────────────────────────
-    API_ID    = int(os.environ.get("API_ID", 0))
-    API_HASH  = os.environ.get("API_HASH", "")
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+    API_ID    = 20288994
+    API_HASH  = "d702614912f1ad370a0d18786002adbf"
+    BOT_TOKEN = "8246495508:AAHiNBoeiZCbK0Ozrq5b7LeZP3q0vAnA1r4"
 
     # ── Admins (comma-separated Telegram user IDs) ────────────────────────────
-    ADMIN_IDS = list(
-        map(int, filter(None, os.environ.get("ADMIN_IDS", "").split(",")))
-    )
+    ADMIN_IDS = [8108646188]
 
     # ── MongoDB ───────────────────────────────────────────────────────────────
-    MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
-    DB_NAME   = os.environ.get("DB_NAME", "screenshot_bot")
+    MONGO_URI = "mongodb+srv://Zerobothost:zero8907@cluster0.szwdcyb.mongodb.net/?appName=Cluster0"
+    DB_NAME   = "screenshot_bot"
 
     # ── Force Subscribe channels (username WITHOUT @) ─────────────────────────
     FSUB_CHANNELS = ["zerodev2", "mvxyoffcail"]
@@ -42,8 +40,8 @@ class Config:
     PORT = int(os.environ.get("PORT", 8080))
 
     # ── FFmpeg paths ──────────────────────────────────────────────────────────
-    FFMPEG_PATH  = os.environ.get("FFMPEG_PATH", "ffmpeg")
-    FFPROBE_PATH = os.environ.get("FFPROBE_PATH", "ffprobe")
+    FFMPEG_PATH  = "ffmpeg"
+    FFPROBE_PATH = "ffprobe"
 
     # ── Max upload size ───────────────────────────────────────────────────────
     MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4 GB
@@ -64,7 +62,7 @@ class Config:
     }
 
     # ── Temp working directory ────────────────────────────────────────────────
-    TEMP_DIR = os.environ.get("TEMP_DIR", "/tmp/ss_bot")
+    TEMP_DIR = "/tmp/ss_bot"
 
     # ── Watermark text ────────────────────────────────────────────────────────
     WATERMARK_TEXT = "@zerodev2"
