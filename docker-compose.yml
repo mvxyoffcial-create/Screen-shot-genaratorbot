@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: screenshot_bot
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      - API_ID=${API_ID}
+      - API_HASH=${API_HASH}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - MONGO_URI=mongodb://mongo:27017
+      - DB_NAME=${DB_NAME:-screenshot_bot}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - PORT=8080
+      - TEMP_DIR=/tmp/ss_bot
+    volumes:
+      - /tmp/ss_bot:/tmp/ss_bot
+    depends_on:
+      - mongo
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  mongo:
+    image: mongo:6
+    container_name: screenshot_mongo
+    restart: always
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:
